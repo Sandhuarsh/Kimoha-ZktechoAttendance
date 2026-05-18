@@ -1,20 +1,19 @@
-// Copyright (c) 2025, osama.ahmed@deliverydevs.com and contributors
-// For license information, please see license.txt
+// Copyright (c) 2025
 
 frappe.ui.form.on("ZKTeco Config", {
+
     refresh(frm) {
-        // Add custom buttons
+        // Buttons only if token + enabled
         if (frm.doc.enable_sync && frm.doc.token) {
-            frm.add_custom_button(__('Manual Sync'), function() {
+            frm.add_custom_button(__('Manual Sync'), function () {
                 manual_sync(frm);
             }, __('Actions'));
-            
-            frm.add_custom_button(__('Sync Status'), function() {
+
+            frm.add_custom_button(__('Sync Status'), function () {
                 show_sync_status(frm);
             }, __('Actions'));
         }
-        
-        // Show sync status indicator
+
         if (frm.doc.enable_sync) {
             show_sync_indicator(frm);
         }
@@ -23,212 +22,171 @@ frappe.ui.form.on("ZKTeco Config", {
     enable_sync(frm) {
         if (frm.doc.enable_sync) {
             frappe.show_alert({
-                message: __('ZKTeco sync enabled. Configure server settings and test connection.'),
+                message: __('ZKTeco sync enabled. Configure and test connection.'),
                 indicator: 'blue'
             });
         }
     },
 
+    // =========================
+    // TEST CONNECTION (FIXED)
+    // =========================
     test_connection(frm) {
         frappe.call({
             method: "zkteco_checkins_sync.zkteco_checkin_sync.doctype.zkteco_config.zkteco_config.test_connection",
+            args: {
+                docname: frm.doc.name   // ✅ IMPORTANT
+            },
             freeze: true,
             freeze_message: __("Testing connection...")
         }).then((r) => {
+
             const msg = r.message || {};
+
             if (msg.ok) {
                 frappe.show_alert({
-                    message: __(`✅ Connected successfully! Found ${msg.total_transactions || 0} transactions today.`),
+                    message: __(`✅ Connected! Transactions: ${msg.count || 0}`),
                     indicator: "green"
                 });
-                
-                // Show detailed transaction preview
-                if (msg.transactions_preview && msg.transactions_preview.length > 0) {
-                    show_transaction_preview(msg.transactions_preview, msg.total_transactions);
-                } else {
-                    frappe.msgprint({
-                        title: __("Connection Successful"),
-                        message: __(`✅ Connected to ZKTeco device successfully!<br>
-                                   📊 Total transactions today: ${msg.total_transactions || 0}<br>
-                                   🔗 URL: ${msg.url}<br>
-                                   📡 Status: ${msg.status_code}`),
-                        indicator: "green"
-                    });
+
+                if (msg.sample && msg.sample.length) {
+                    show_transaction_preview(msg.sample, msg.count);
                 }
+
             } else {
-                frappe.show_alert({
-                    message: __(`❌ Connection failed. Status: ${msg.status_code || "N/A"}`),
+                frappe.msgprint({
+                    title: __("Connection Failed"),
+                    message: msg.error || "Unknown error",
                     indicator: "red"
                 });
-                if (msg.error) {
-                    frappe.msgprint({
-                        title: __("Connection Error"),
-                        message: `<pre style="white-space:pre-wrap; color: red;">${frappe.utils.escape_html(msg.error)}</pre>`,
-                        indicator: "red"
-                    });
-                }
             }
-        }).catch((e) => {
-            frappe.msgprint({
-                title: __("Error"),
-                message: `<pre style="white-space:pre-wrap; color: red;">${frappe.utils.escape_html(e.message || e)}</pre>`,
-                indicator: "red"
-            });
+
         });
     },
 
+    // =========================
+    // REGISTER TOKEN (FIXED)
+    // =========================
     register_api_token(frm) {
         frappe.call({
             method: "zkteco_checkins_sync.zkteco_checkin_sync.doctype.zkteco_config.zkteco_config.register_api_token",
+            args: {
+                docname: frm.doc.name   // ✅ IMPORTANT
+            },
             freeze: true,
             freeze_message: __("Registering token...")
         }).then((r) => {
+
             if (r.message && r.message.token) {
                 frm.set_value("token", r.message.token);
+
                 frm.save().then(() => {
-                    frappe.show_alert({ 
-                        message: __("✅ API token registered and saved successfully!"), 
-                        indicator: "green" 
+                    frappe.show_alert({
+                        message: __("✅ Token saved successfully"),
+                        indicator: "green"
                     });
                 });
             }
-        }).catch((e) => {
-            frappe.msgprint({
-                title: __("Token Registration Failed"),
-                message: frappe.utils.escape_html(e.message || e),
-                indicator: "red"
-            });
+
         });
     }
 });
 
+
+// =========================
+// TRANSACTION PREVIEW
+// =========================
 function show_transaction_preview(transactions, total_count) {
-    let html = `<div style="margin-bottom: 15px;">
-                    <strong>📊 Found ${total_count} transactions today</strong><br>
-                    <small>Showing latest ${transactions.length} transactions:</small>
-                </div>`;
-    
-    html += `<div style="max-height: 400px; overflow-y: auto;">
-             <table class="table table-bordered table-striped" style="font-size: 12px;">
-                <thead>
-                    <tr style="background-color: #f8f9fa;">
-                        <th>ID</th>
-                        <th>Employee</th>
-                        <th>Time</th>
-                        <th>Type</th>
-                        <th>Device</th>
-                        <th>ERPNext Status</th>
-                    </tr>
-                </thead>
-                <tbody>`;
-    
-    transactions.forEach(txn => {
-        const statusBadge = txn.erpnext_employee ? 
-            '<span style="color: green;">✅ Mapped</span>' : 
-            '<span style="color: orange;">⚠️ Not Found</span>';
-        
-        const logTypeColor = txn.log_type === 'IN' ? 'blue' : 'red';
-        
+
+    let html = `<b>Transactions Found: ${total_count}</b><br><br>`;
+
+    html += `<table class="table table-bordered">
+        <tr>
+            <th>Emp Code</th>
+            <th>Time</th>
+        </tr>`;
+
+    transactions.forEach(t => {
         html += `<tr>
-                    <td>${txn.id || 'N/A'}</td>
-                    <td>
-                        <strong>${txn.employee_code}</strong><br>
-                        <small>${txn.zkteco_name || 'Unknown'}</small>
-                    </td>
-                    <td>${txn.punch_time}</td>
-                    <td><span style="color: ${logTypeColor}; font-weight: bold;">${txn.log_type}</span></td>
-                    <td>${txn.device_id || 'Unknown'}</td>
-                    <td>${statusBadge}</td>
-                </tr>`;
+            <td>${t.emp_code || "-"}</td>
+            <td>${t.punch_time || "-"}</td>
+        </tr>`;
     });
-    
-    html += `</tbody></table></div>`;
-    
-    html += `<div style="margin-top: 15px; padding: 10px; background-color: #e7f3ff; border-radius: 4px;">
-                <small><strong>💡 Tips:</strong><br>
-                • Make sure employee codes in ERPNext match the emp_code from ZKTeco<br>
-                • Employees with "Not Found" status won't be synced to ERPNext<br>
-                • Enable sync and set frequency to automatically import these transactions</small>
-             </div>`;
-    
-    const d = new frappe.ui.Dialog({
-        title: __('ZKTeco Transactions Preview'),
-        fields: [{
-            fieldtype: 'HTML',
-            fieldname: 'transaction_preview',
-            options: html
-        }],
-        size: 'large'
+
+    html += `</table>`;
+
+    frappe.msgprint({
+        title: "Preview",
+        message: html,
+        wide: true
     });
-    
-    d.show();
 }
 
+
+// =========================
+// MANUAL SYNC (PER DEVICE)
+// =========================
 function manual_sync(frm) {
     frappe.call({
         method: "zkteco_checkins_sync.zkteco_checkin_sync.doctype.zkteco_config.zkteco_config.manual_sync",
+        args: {
+            docname: frm.doc.name   // ✅ IMPORTANT
+        },
         freeze: true,
-        freeze_message: __("Syncing transactions...")
+        freeze_message: __("Syncing...")
     }).then((r) => {
+
         if (r.message && r.message.success) {
             frappe.show_alert({
-                message: __('✅ Manual sync completed successfully!'),
-                indicator: 'green'
-            });
-        } else {
-            frappe.show_alert({
-                message: __(`❌ Sync failed: ${r.message.message || 'Unknown error'}`),
-                indicator: 'red'
+                message: "✅ Sync Completed",
+                indicator: "green"
             });
         }
     });
 }
 
+
+// =========================
+// STATUS (MULTI DEVICE)
+// =========================
 function show_sync_status(frm) {
     frappe.call({
         method: "zkteco_checkins_sync.zkteco_checkin_sync.doctype.zkteco_config.zkteco_config.get_sync_status"
     }).then((r) => {
-        const status = r.message || {};
-        
-        let html = '<div style="padding: 10px;">';
-        
-        if (status.error) {
-            html += `<div style="color: red;">❌ Error: ${status.error}</div>`;
-        } else {
-            html += `<table class="table table-bordered">
-                        <tr><td><strong>Sync Enabled:</strong></td><td>${status.enabled ? '✅ Yes' : '❌ No'}</td></tr>
-                        <tr><td><strong>Sync Frequency:</strong></td><td>Every ${status.sync_frequency || 'N/A'} seconds</td></tr>
-                        <tr><td><strong>Last Sync:</strong></td><td>${status.last_sync || 'Never'}</td></tr>
-                        <tr><td><strong>Recent Check-ins (24h):</strong></td><td>${status.recent_checkins_24h || 0}</td></tr>
-                        <tr><td><strong>Server Configured:</strong></td><td>${status.server_configured ? '✅ Yes' : '❌ No'}</td></tr>
-                        <tr><td><strong>Token Configured:</strong></td><td>${status.token_configured ? '✅ Yes' : '❌ No'}</td></tr>
-                     </table>`;
-        }
-        
-        html += '</div>';
-        
+
+        let html = "<b>Total Devices: " + r.message.total_devices + "</b><br><br>";
+
+        r.message.devices.forEach(d => {
+            html += `<div style="margin-bottom:10px;">
+                        <b>${d.name}</b><br>
+                        Enabled: ${d.enable_sync ? "✅" : "❌"}<br>
+                        Last Sync: ${d.last_sync || "Never"}
+                     </div><hr>`;
+        });
+
         frappe.msgprint({
-            title: __('ZKTeco Sync Status'),
-            message: html,
-            indicator: status.enabled ? 'green' : 'orange'
+            title: "Sync Status",
+            message: html
         });
     });
 }
 
+
+// =========================
+// INDICATOR
+// =========================
 function show_sync_indicator(frm) {
-    const sync_frequency = frm.doc.seconds;
-    const token_configured = frm.doc.token ? true : false;
-    
-    let indicator_color = 'red';
-    let indicator_text = 'Sync Disabled';
-    
-    if (frm.doc.enable_sync && token_configured) {
-        indicator_color = 'green';
-        indicator_text = `Sync Active (${sync_frequency}s)`;
+
+    let color = "red";
+    let text = "Sync Disabled";
+
+    if (frm.doc.enable_sync && frm.doc.token) {
+        color = "green";
+        text = `Active (${frm.doc.seconds}s)`;
     } else if (frm.doc.enable_sync) {
-        indicator_color = 'orange';
-        indicator_text = 'Sync Enabled (Token Missing)';
+        color = "orange";
+        text = "Token Missing";
     }
-    
-    frm.dashboard.add_indicator(indicator_text, indicator_color);
+
+    frm.dashboard.add_indicator(text, color);
 }
